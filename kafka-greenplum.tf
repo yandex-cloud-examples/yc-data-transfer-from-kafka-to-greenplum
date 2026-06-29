@@ -1,4 +1,4 @@
-# Infrastructure for Yandex Cloud Managed Service for Greenplum® and Managed Service for Apache Kafka®
+# Infrastructure for Yandex MPP Analytics for PostgreSQL and Managed Service for Apache Kafka®
 #
 # RU: https://yandex.cloud/ru/docs/data-transfer/tutorials/managed-kafka-to-greenplum
 # EN: https://yandex.cloud/en/docs/data-transfer/tutorials/managed-kafka-to-greenplum
@@ -12,14 +12,13 @@ locals {
   kf_password = "" # Apache Kafka® user's password
 
   # Specify these settings ONLY AFTER the clusters are created. Then run "terraform apply" command again.
-  # You should set up endpoints using the GUI to obtain their IDs
-  kf_source_endpoint_id = "" # Set the source endpoint ID
-  gp_target_endpoint_id = "" # Set the target endpoint ID
+  # You should set up the target Greenplum® endpoint using the GUI to obtain its ID
+  gp_target_endpoint_id = "" # Set the target Greenplum® endpoint ID
   transfer_enabled      = 0  # Set to 1 to enable the transfer
 
   # The following settings are predefined. Change them only if necessary.
 
-  # Managed Service for Greenplum®:
+  # Yandex MPP Analytics for PostgreSQL:
   mgp_network_name        = "mgp_network"        # Name of the network for the Greenplum® cluster
   mgp_subnet_name         = "mgp_subnet-a"       # Name of the subnet for the Greenplum® cluster
   mgp_security_group_name = "mgp_security_group" # Name of the security group for the Greenplum® cluster
@@ -35,13 +34,13 @@ locals {
   kf_username             = "mkf-user"           # Username of the Apache Kafka® cluster
 
   # Data Transfer:
-  transfer_name = "mkf-mgp-transfer" # Name of the transfer from the Managed Service for Apache Kafka® to the Managed Service for Greenplum®
+  transfer_name = "mkf-mgp-transfer" # Name of the transfer from Managed Service for Apache Kafka® to Yandex MPP Analytics for PostgreSQL
 }
 
 # Network infrastructure
 
 resource "yandex_vpc_network" "mgp_network" {
-  description = "Network for Managed Service for Greenplum®"
+  description = "Network for Yandex MPP Analytics for PostgreSQL"
   name        = local.mgp_network_name
 }
 
@@ -67,7 +66,7 @@ resource "yandex_vpc_subnet" "mkf_subnet-a" {
 }
 
 resource "yandex_vpc_security_group" "mgp_security_group" {
-  description = "Security group for Managed Service for Greenplum®"
+  description = "Security group for Yandex MPP Analytics for PostgreSQL"
   network_id  = yandex_vpc_network.mgp_network.id
   name        = local.mgp_security_group_name
 
@@ -109,10 +108,10 @@ resource "yandex_vpc_security_group" "mkf_security_group" {
   }
 }
 
-# Infrastructure for the Managed Service for Greenplum® cluster
+# Infrastructure for the Yandex MPP Analytics for PostgreSQL cluster
 
 resource "yandex_mdb_greenplum_cluster" "mgp-cluster" {
-  description        = "Managed Service for Greenplum® cluster"
+  description        = "Yandex MPP Analytics for PostgreSQL cluster"
   name               = local.gp_cluster_name
   environment        = "PRODUCTION"
   network_id         = yandex_vpc_network.mgp_network.id
@@ -200,11 +199,80 @@ resource "yandex_mdb_kafka_user" "mkf-user" {
 
 # Data Transfer infrastructure
 
+resource "yandex_datatransfer_endpoint" "kf-source" {
+  description = "Source endpoint for the Managed Service for Apache Kafka® cluster"
+  count       = local.transfer_enabled
+  name        = "kf-source"
+  settings {
+    kafka_source {
+      connection {
+        cluster_id = yandex_mdb_kafka_cluster.mkf-cluster.id
+      }
+      auth {
+        sasl {
+          user = yandex_mdb_kafka_user.mkf-user.name
+          password {
+            raw = local.kf_password
+          }
+        }
+      }
+      topic_names = [
+        yandex_mdb_kafka_topic.sensors.name
+      ]
+      parser {
+        json_parser {
+          data_schema {
+            fields {
+              fields {
+                name = "device_id"
+                type = "UTF8"
+                key  = true
+              }
+              fields {
+                name = "datetime"
+                type = "UTF8"
+              }
+              fields {
+                name = "latitude"
+                type = "DOUBLE"
+              }
+              fields {
+                name = "longitude"
+                type = "DOUBLE"
+              }
+              fields {
+                name = "altitude"
+                type = "DOUBLE"
+              }
+              fields {
+                name = "speed"
+                type = "DOUBLE"
+              }
+              fields {
+                name = "battery_voltage"
+                type = "DOUBLE"
+              }
+              fields {
+                name = "cabin_temperature"
+                type = "UINT16"
+              }
+              fields {
+                name = "fuel_level"
+                type = "UINT16"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 resource "yandex_datatransfer_transfer" "mkf-mgp-transfer" {
-  description = "Transfer from the Managed Service for Apache Kafka® to the Managed Service for Greenplum®"
+  description = "Transfer from Managed Service for Apache Kafka® to Yandex MPP Analytics for PostgreSQL"
   count       = local.transfer_enabled
   name        = local.transfer_name
-  source_id   = local.kf_source_endpoint_id
+  source_id   = yandex_datatransfer_endpoint.kf-source[count.index].id
   target_id   = local.gp_target_endpoint_id
-  type        = "INCREMENT_ONLY" # Data replication from the source Managed Service for Apache Kafka® topic to the target Managed Service for Greenplum® cluster
+  type        = "INCREMENT_ONLY" # Data replication from the source Managed Service for Apache Kafka® topic to the target Yandex MPP Analytics for PostgreSQL cluster
 }
